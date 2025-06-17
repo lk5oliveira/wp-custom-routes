@@ -14,7 +14,12 @@ class CustomHomeRedirect {
     
     public function __construct() {
         add_action('template_redirect', [$this, 'handle_home_redirect'], 1);
+        add_action('wp', [$this, 'handle_wp_redirect'], 1);
+        add_action('parse_request', [$this, 'handle_parse_request'], 1);
         add_action('init', [$this, 'handle_early_redirect'], 1);
+        
+        // Add a very early redirect that catches requests before WordPress processes them
+        add_action('muplugins_loaded', [$this, 'handle_very_early_redirect'], 1);
         
         // Always log when class is constructed
         error_log('CRM: CustomHomeRedirect class constructed');
@@ -35,15 +40,93 @@ class CustomHomeRedirect {
     }
     
     /**
+     * Very early redirect - catches requests before WordPress fully loads
+     */
+    public function handle_very_early_redirect() {
+        error_log('CRM: handle_very_early_redirect called');
+        $this->try_redirect('muplugins_loaded');
+    }
+    
+    /**
      * Early redirect handler - try to catch home page earlier
      */
     public function handle_early_redirect() {
-        // Only log if we're on a page that might be home
+        error_log('CRM: handle_early_redirect called');
+        $this->try_redirect('init');
+    }
+    
+    /**
+     * Handle redirect on wp hook
+     */
+    public function handle_wp_redirect() {
+        error_log('CRM: handle_wp_redirect called on wp hook');
+        $this->try_redirect('wp');
+    }
+    
+    /**
+     * Handle redirect on parse_request hook
+     */
+    public function handle_parse_request($wp) {
+        error_log('CRM: handle_parse_request called');
+        error_log('CRM: WP request: ' . print_r($wp->request ?? 'not set', true));
+        
+        // Check if this is a home page request
+        if (empty($wp->request) || $wp->request === '') {
+            error_log('CRM: Empty request detected, attempting redirect');
+            $this->try_redirect('parse_request');
+        }
+    }
+    
+    /**
+     * Try to perform redirect from various hooks
+     */
+    private function try_redirect($hook_name) {
+        error_log('CRM: try_redirect called from hook: ' . $hook_name);
+        
+        // Skip if admin
+        if (is_admin() || defined('DOING_AJAX') || defined('DOING_CRON')) {
+            error_log('CRM: Skipping - admin/ajax/cron');
+            return;
+        }
+        
+        $home_redirect = get_option('custom_home_redirect', []);
+        error_log('CRM: Home redirect settings: ' . print_r($home_redirect, true));
+        
+        if (empty($home_redirect['enabled'])) {
+            error_log('CRM: Home redirect disabled');
+            return;
+        }
+        
+        // Simple home page check for early hooks
         $request_uri = $_SERVER['REQUEST_URI'] ?? '';
-        if ($request_uri === '/' || $request_uri === '' || strpos($request_uri, '?') === 0) {
-            error_log('CRM: Early redirect check - URI: ' . $request_uri);
-            error_log('CRM: Is admin: ' . (is_admin() ? 'yes' : 'no'));
-            error_log('CRM: Current hook: ' . current_action());
+        $home_url = home_url();
+        
+        error_log('CRM: Request URI: ' . $request_uri);
+        error_log('CRM: Home URL: ' . $home_url);
+        
+        // Very simple check - if it's root path or has query params on root
+        $is_root_request = ($request_uri === '/' || $request_uri === '' || 
+                           preg_match('/^\/(\\?.*)?$/', $request_uri));
+        
+        error_log('CRM: Is root request (' . $hook_name . '): ' . ($is_root_request ? 'yes' : 'no'));
+        
+        if ($is_root_request) {
+            // Additional check - avoid redirect loops
+            if (strpos($request_uri, 'no_redirect') !== false || 
+                strpos($request_uri, 'crm_redirect_bypass') !== false) {
+                error_log('CRM: Bypass parameter detected');
+                return;
+            }
+            
+            // Check for recent redirects
+            if ($this->has_recent_redirect()) {
+                error_log('CRM: Recent redirect detected, skipping');
+                return;
+            }
+            
+            error_log('CRM: Executing redirect from ' . $hook_name);
+            $this->mark_redirect_execution();
+            $this->execute_redirect_direct($home_redirect);
         }
     }
     
@@ -224,6 +307,45 @@ class CustomHomeRedirect {
     private function mark_redirect_execution() {
         $transient_key = 'crm_redirect_' . md5($_SERVER['REMOTE_ADDR'] ?? 'unknown');
         set_transient($transient_key, time(), 10); // 10 second window
+    }
+    
+    /**
+     * Execute the redirect based on settings (direct version for early hooks)
+     */
+    private function execute_redirect_direct($home_redirect) {
+        error_log('CRM: execute_redirect_direct called with type: ' . ($home_redirect['type'] ?? 'not set'));
+        
+        if ($home_redirect['type'] === 'custom' && !empty($home_redirect['custom_page'])) {
+            $custom_page = $this->safe_trim($home_redirect['custom_page']);
+            error_log('CRM: Direct redirect to custom page: ' . $custom_page);
+            
+            // Check if it's a file that exists
+            $file_path = ABSPATH . $this->safe_ltrim($custom_page, '/');
+            if (file_exists($file_path) && is_file($file_path)) {
+                error_log('CRM: File exists, serving directly: ' . $file_path);
+                
+                // Set basic headers
+                if (!headers_sent()) {
+                    header('Cache-Control: no-cache, must-revalidate');
+                    header('Expires: Sat, 26 Jul 1997 05:00:00 GMT');
+                }
+                
+                // Include the file
+                include($file_path);
+                exit;
+            } else {
+                // Treat as URL redirect
+                $redirect_url = filter_var($custom_page, FILTER_VALIDATE_URL) ? 
+                               $custom_page : home_url($this->safe_ltrim($custom_page, '/'));
+                
+                error_log('CRM: Redirecting to URL: ' . $redirect_url);
+                wp_redirect($redirect_url, 302);
+                exit;
+            }
+        } else {
+            // Fall back to original method
+            $this->execute_redirect($home_redirect);
+        }
     }
     
     /**
