@@ -21,6 +21,20 @@ class CustomHomeRedirect {
     }
     
     /**
+     * Safe trim function that handles null values
+     */
+    private function safe_trim($string, $characters = " \t\n\r\0\x0B") {
+        return $string !== null ? trim($string, $characters) : '';
+    }
+    
+    /**
+     * Safe ltrim function that handles null values
+     */
+    private function safe_ltrim($string, $characters = " \t\n\r\0\x0B") {
+        return $string !== null ? ltrim($string, $characters) : '';
+    }
+    
+    /**
      * Early redirect handler - try to catch home page earlier
      */
     public function handle_early_redirect() {
@@ -98,15 +112,16 @@ class CustomHomeRedirect {
         error_log('CRM: Raw REQUEST_URI: ' . $request_uri);
         error_log('CRM: Home URL: ' . $home_url);
         
-        $request_uri_trimmed = trim($request_uri, '/');
-        $home_path = trim(parse_url($home_url, PHP_URL_PATH), '/');
+        $request_uri_trimmed = $this->safe_trim($request_uri, '/');
+        $parsed_path = parse_url($home_url, PHP_URL_PATH);
+        $home_path = $this->safe_trim($parsed_path, '/');
         
         error_log('CRM: Trimmed REQUEST_URI: "' . $request_uri_trimmed . '"');
         error_log('CRM: Home path from URL: "' . $home_path . '"');
         
         // Remove query string for comparison
         $request_path = explode('?', $request_uri_trimmed)[0];
-        $request_path = trim($request_path, '/');
+        $request_path = $this->safe_trim($request_path, '/');
         
         error_log('CRM: Request path (no query): "' . $request_path . '"');
         
@@ -193,7 +208,7 @@ class CustomHomeRedirect {
             return false;
         }
         
-        $custom_page = trim($home_redirect['custom_page']);
+        $custom_page = $this->safe_trim($home_redirect['custom_page'] ?? '');
         
         // Check if referer contains the custom page path
         if (strpos($referer, $custom_page) !== false) {
@@ -248,7 +263,7 @@ class CustomHomeRedirect {
      * Redirect to custom page
      */
     private function redirect_to_custom_page($custom_page) {
-        $custom_page = trim($custom_page);
+        $custom_page = $this->safe_trim($custom_page);
         error_log('CRM: redirect_to_custom_page called with: "' . $custom_page . '"');
         
         // Check if it's a full URL
@@ -262,10 +277,10 @@ class CustomHomeRedirect {
         }
         
         // Check if it's a file path by looking for file existence
-        $file_path = ABSPATH . ltrim($custom_page, '/');
+        $file_path = ABSPATH . $this->safe_ltrim($custom_page, '/');
         error_log('CRM: Checking file path: ' . $file_path);
         error_log('CRM: ABSPATH: ' . ABSPATH);
-        error_log('CRM: Custom page after ltrim: ' . ltrim($custom_page, '/'));
+        error_log('CRM: Custom page after ltrim: ' . $this->safe_ltrim($custom_page, '/'));
         
         $file_exists = file_exists($file_path);
         $is_file = is_file($file_path);
@@ -278,7 +293,7 @@ class CustomHomeRedirect {
             $this->serve_custom_file($custom_page);
         } else {
             // Treat as relative URL path
-            $redirect_url = home_url(ltrim($custom_page, '/'));
+            $redirect_url = home_url($this->safe_ltrim($custom_page, '/'));
             error_log('CRM: File not found, treating as URL path. Redirecting to: ' . $redirect_url);
             wp_redirect($redirect_url, 302);
             exit;
@@ -289,7 +304,7 @@ class CustomHomeRedirect {
      * Serve custom file directly
      */
     private function serve_custom_file($custom_page) {
-        $file_path = ABSPATH . ltrim($custom_page, '/');
+        $file_path = ABSPATH . $this->safe_ltrim($custom_page, '/');
         $debug_mode = isset($_GET['crm_debug']);
         
         if ($debug_mode) {

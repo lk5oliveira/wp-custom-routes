@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Custom Routes Manager
  * Description: Manage custom page routes through WordPress admin with modern UI
- * Version: 2.1
+ * Version: 2.2
  * Author: Lucas Oliveira
  */
 
